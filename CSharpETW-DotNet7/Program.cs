@@ -768,36 +768,9 @@ namespace CSharpETW
 
         private void KCBCreate(RegistryTraceData obj)
         {
-            /*
-            Console.WriteLine(
-              "EventName:{0} \t KeyHandle: 0x{1:X} \t KeyName: {2} \t ProcessName: {3}",
-              obj.EventName, obj.KeyHandle, obj.KeyName, obj.ProcessName
-              );
-            */
+ 
             var keyName = new string(obj.KeyName);
-            /*
-            if (KeyHandle2KeyName.ContainsKey(obj.KeyHandle))
-            {
-                if (KeyHandle2KeyName[obj.KeyHandle] == keyName)
-                {
-                    return;
-                }
-            }*/
-            
-            /*
-            KeyHandle2KeyName.AddOrUpdate(obj.KeyHandle, (_) => { Interlocked.Increment(ref createCount); return keyName; }, (key, oldValue) =>
-            {
-                if (keyName != oldValue)
-                {
-                    return keyName;
-                }
-                else
-                {
-                    return oldValue;
-                }
-            });
-            */
-            
+                   
             KeyHandle2KeyName.AddOrUpdate(obj.KeyHandle, keyName, (key, oldValue) =>
             {
                 if (keyName!=oldValue)
@@ -809,38 +782,7 @@ namespace CSharpETW
                     return oldValue;
                 }
             });
-            
-            //KeyHandle2KeyName.TryAdd(obj.KeyHandle, keyName);
-            /*
-            //Returns null if the string does not exist, prevents a race condition where the cache invalidates between the contains check and the retreival.
-            string CacheKey = obj.KeyHandle.ToString();
-            var cachedString = MemoryCache.Default.Get(CacheKey) as string;
-            var keyName = obj.KeyName;
-            if (cachedString == keyName)
-            {
-                //Console.WriteLine("same");
-                return;
-            }
-
-            lock (lockObject) 
-            {
-                //Check to see if anyone wrote to the cache while we where waiting our turn to write the new value.
-                cachedString = MemoryCache.Default.Get(CacheKey) as string;
-
-                if (cachedString == keyName)
-                {
-                    return;
-                }
-
-                //The value still did not exist so we now write it in to the cache.
-                CacheItemPolicy cip = new CacheItemPolicy();
-                cip.SlidingExpiration = TimeSpan.FromSeconds(30);
-                //cip.AbsoluteExpiration = DateTimeOffset.Now.AddSeconds(60);             
-                MemoryCache.Default.Set(CacheKey, keyName, cip);
-                //Console.WriteLine(KeyHandle2KeyNameCache.GetCount());
-                return;
-            }
-            */
+                   
         }
         private void KCBDelete(RegistryTraceData obj)
         {       
@@ -1062,7 +1004,9 @@ namespace CSharpETW
 
                 task.Wait();
                 rundown_task.Wait();
-                 
+                
+                
+                //Delete test keys
                 /*
                 if (OperatingSystem.IsWindows())
                 {
