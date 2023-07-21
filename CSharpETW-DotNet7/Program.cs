@@ -69,17 +69,11 @@ namespace CSharpETW
         //concurrentdictionary config
         private static readonly int concurrencyLevel = Environment.ProcessorCount;
         private static readonly int intitialCapacity = 7000;
-        //private static ConcurrentDictionary<ulong, KeyInfo> KeyHandle2KeyName = new ConcurrentDictionary<ulong, KeyInfo>() { };
         private  ConcurrentDictionary<ulong, string> KeyHandle2KeyName = new ConcurrentDictionary<ulong, string>(concurrencyLevel, intitialCapacity) { };
-        //private static ObjectCache KeyHandle2KeyNameCache = MemoryCache.Default;
 
         // user info
         private static readonly string currentUserSid = OperatingSystem.IsWindows() ? WindowsIdentity.GetCurrent().User.Value : null;
         private static readonly int pid = Process.GetCurrentProcess().Id;
-
-        private static int createCount=0;
-        private static int deleteCount=0;
-        private static int totalCount=0;
 
         //Config setting
         private static readonly double MonitorTimeInSeconds = 2;
@@ -172,25 +166,6 @@ namespace CSharpETW
             _certList = certList;
 
         }
-        /*
-        public void ClearTask()
-        {
-            clear_timer = new Timer(delegate (object? state)
-            {
-                DateTime CurrentTime = DateTime.Now;
-                QueuedConsole.WriteLine("Clear crontab exec!!");
-                foreach(KeyValuePair<ulong,KeyInfo> kv in KeyHandle2KeyName)
-                {
-                    if( (CurrentTime - kv.Value.Timestamp).TotalSeconds > 60)
-                    {                      
-                        KeyHandle2KeyName.TryRemove(kv.Key, out KeyInfo keyinfo);
-                        
-                    }
-                }
-
-
-            }, null, (int)(121 * 1000), (int)(121 * 1000));         
-        }*/
 
         public void SocketPublisher(ETWRecords records)
         {
@@ -200,8 +175,7 @@ namespace CSharpETW
             pubSocket.Options.SendHighWatermark = 1000;
             string jsonData = JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true });
             QueuedConsole.WriteLine(jsonData);
-            //pubSocket.SendMoreFrame("").SendFrame(jsonData);
-            
+            pubSocket.SendMoreFrame("").SendFrame(jsonData);         
             //Thread.Sleep(100);                                                  
         }
 
@@ -385,12 +359,8 @@ namespace CSharpETW
                             
                             timer = new Timer(delegate (object? state)
                             {
-                                //QueuedConsole.WriteLine("Timer crontab exec!!");
-                                //session.Source.StopProcessing();
-
-                                
                                 session.Stop();
-                                //session.Source.Dispose();
+                                
                             }, null, (int)(MonitorTimeInSeconds * 1000), Timeout.Infinite);
                         }
                         else
@@ -399,15 +369,8 @@ namespace CSharpETW
                             timer = new Timer(delegate (object? state)
                             {
                                 //QueuedConsole.WriteLine("Timer crontab exec!!");
-                                //session.Source.StopProcessing();
                                 session.Stop();
-                                /*
-                                QueuedConsole.WriteLine($"Increase count:{createCount}");
-                                QueuedConsole.WriteLine($"Decrease count:{deleteCount}");
-                                totalCount += (createCount - deleteCount);
-                                QueuedConsole.WriteLine($"Total count:{totalCount}");*/
-                                QueuedConsole.WriteLine($"Dict count:{KeyHandle2KeyName.Count}");
-                                //session.Source.Dispose();
+                                //QueuedConsole.WriteLine($"Dict count:{KeyHandle2KeyName.Count}");
                             }, null, (int)(5 * 1000), Timeout.Infinite);
                         }
                         
@@ -426,89 +389,7 @@ namespace CSharpETW
             }
 
         }
-        public async Task RunDownSession2(String sessionName, CancellationToken token)
-        {
-            try
-            {
-                
-                QueuedConsole.WriteLine($"Starting rundown session: {sessionName}");
-
-                using (TraceEventSession session = new TraceEventSession(sessionName))
-                {
-                    session.EnableKernelProvider(NTKeywords.Registry, NTKeywords.None);
-
-                    MakeKernelParserStateless(session.Source);
-                    session.Source.Kernel.RegistryKCBRundownBegin += KCBCreate;
-                    session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;
-                    
-                    token.Register(() =>
-                    {
-                        QueuedConsole.WriteLine("RunDown stop!!");
-                        session.Stop();
-                        session.Dispose();
-                        
-                    });
-                        
-                    
-                    timer = new Timer(delegate (object? state)
-                    {
-                        //QueuedConsole.WriteLine("Timer crontab exec!!");
-                        //session.Source.StopProcessing();
-                        session.Stop();
-                        //session.Source.Dispose();
-                    }, null, (int)(MonitorTimeInSeconds * 1000), (int)(MonitorTimeInSeconds * 1000));
-
-                    await Task.Run(() => session.Source.Process());
-                    
-                    session.Source.Dispose();
-                    session.Dispose();
-                }
-
-                
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Exception occurred in RunDownSession: " + ex.ToString());
-            }
-
-        }
-        public async Task RunDownSession3(String sessionName)
-        {
-            try
-            {
-                var stop = false;
-                
-                QueuedConsole.WriteLine($"Starting rundown session: {sessionName}");
-                while (!stop)
-                {
-
-                    using (TraceEventSession session = new TraceEventSession(sessionName))
-                    {
-                        session.EnableKernelProvider(NTKeywords.Registry, NTKeywords.None);
-
-                        MakeKernelParserStateless(session.Source);
-                        session.Source.Kernel.RegistryKCBRundownBegin += KCBCreate;
-                        session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;                       
-
-                        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.0));
-                        var _r = cts.Token.Register(() => { session.Stop(); });
-
-                        await Task.Run(() => session.Source.Process());                       
-                        session.Source.Dispose();
-                        session.Dispose();
-                        _r.Dispose();
-                        cts.Dispose();
-                        
-                    }
-
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Exception occurred in RunDownSession: " + ex.ToString());
-            }
-
-        }
+        
         public String GetFullName(ulong keyHandle, string keyName)
         {
             var baseKeyName = KeyHandle2KeyName.ContainsKey(keyHandle) ? KeyHandle2KeyName[keyHandle] : "";
@@ -546,13 +427,16 @@ namespace CSharpETW
             var keyHandle = "0x" + obj.KeyHandle.ToString("X");
             var valueName = obj.ValueName;
             var fullKeyName = GetFullName(obj.KeyHandle, obj.KeyName);
-        
-            object value = null;
-            string composite_sz = null;
-            RegistryKey regKey = null;
+            
+            // key & value info
+            object? value = null;
+            string? composite_sz = null;
+            RegistryKey? regKey = null;
             RegistryValueKind rvk;
-            Process process = null;
-            string processPath = null;
+
+            //process info
+            Process? process = null;
+            string? processPath = null;
             // key filter
             bool key_flag = KeyFilter(fullKeyName);
             bool av_flag = false;
@@ -580,7 +464,7 @@ namespace CSharpETW
             try
             {
                 process = Process.GetProcessById(obj.ProcessID);
-                processPath = process.MainModule.FileName;
+                processPath = process.MainModule?.FileName;
                 process.Dispose();
                 // filter
                 if (!ProcessFilter(obj, processPath) && !key_flag)
@@ -746,7 +630,6 @@ namespace CSharpETW
                 Console.WriteLine("EventName:{0} \t PID: {1} \t ProcessName: {2} \t KeyHandle: 0x{3:X} \t KeyName: {4}",obj.EventName, obj.ProcessID, obj.ProcessName, obj.KeyHandle, fullKeyName); 
                 if (value == null) { value = ""; }
                 if (processPath == null) { processPath = ""; }
-                //ETWRecords records = new ETWRecords { EventName = obj.EventName, EventTime = formattedEventTime, ProcessID = obj.ProcessID, ProcessName = obj.ProcessName, ImagePath = processPath, KeyHandle = "0x" + obj.KeyHandle.ToString("X"), FullKeyName = fullKeyName, ValueName = obj.ValueName, Value = value.ToString() };
                 ETWRecords records = new ETWRecords
                 {
                     EventName = eventName,
@@ -759,7 +642,7 @@ namespace CSharpETW
                     ValueName = valueName,
                     Value = value.ToString()
                 };
-                //SocketPublisher(records);
+                SocketPublisher(records);
 
                 existed = false;
             }
@@ -790,7 +673,7 @@ namespace CSharpETW
             //KeyHandle2KeyName[obj.KeyHandle].
             KeyHandle2KeyName.TryRemove(obj.KeyHandle, out keyname);         
             keyname = null;
-            //Uncomment to fix increasing usage of memory
+            //Uncomment to fix issue if increasing usage of memory
             //GC.Collect();
         }
 
@@ -987,11 +870,7 @@ namespace CSharpETW
                 ETWTrace trace = new ETWTrace(certList);
                 Task task = trace.StartSession(cts.Token);
                 Task rundown_task = trace.RunDownSession(sessionName + "_RunDown", cts.Token);
-                //Task rundown_task = trace.RunDownSession3(sessionName + "_RunDown");
 
-                //trace.ClearTask();
-                //Task clear_task = Task.Run(() => trace.ClearTask(), cts.Token);
-                //trace.RunDownSession2(sessionName + "_RunDown");
                 Thread.Sleep(1000);
                 Console.WriteLine("DO OTHER THING");
 
