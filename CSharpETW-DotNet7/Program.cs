@@ -24,34 +24,14 @@ using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
+using Microsoft.Diagnostics.Tracing.Analysis;
+
 
 namespace CSharpETW
 {
     using NTKeywords = KernelTraceEventParser.Keywords;
 
-    class Analysis
-    {
-        public List<int> memoryData = new List<int>();
-
-        public void StartAnalysis(CancellationToken ct)
-        {
-
-
-            while (!ct.IsCancellationRequested)
-            {
-                Process currentProcess = Process.GetCurrentProcess();
-                int memoryUsed = (int)currentProcess.PrivateMemorySize64 / 1024 / 1024;
-                //Console.WriteLine(memoryUsed);
-                // 將記憶體使用量存儲到數據數組中
-                memoryData.Add(memoryUsed);
-
-                // 每秒記錄一次，此處暫停1秒
-                Thread.Sleep(1000);
-            }
-
-
-        }
-    }
+    
     public static class QueuedConsole
     {
         private static BlockingCollection<string> m_Queue = new BlockingCollection<string>();
@@ -83,35 +63,36 @@ namespace CSharpETW
         public ETWRecords() { }
 
     }
-    class KeyInfo
-    {
-        public string KeyName { get; set; } = string.Empty;
-        public DateTime Timestamp { get; set; }
 
-        public KeyInfo() { }
-        public KeyInfo(string keyName, DateTime timestamp)
-        {
-            KeyName = keyName;
-            Timestamp = timestamp;
-        }
-    }
     class ETWTrace
     {
+        //concurrentdictionary config
+        private static readonly int concurrencyLevel = Environment.ProcessorCount;
+        private static readonly int intitialCapacity = 7000;
         //private static ConcurrentDictionary<ulong, KeyInfo> KeyHandle2KeyName = new ConcurrentDictionary<ulong, KeyInfo>() { };
-        private static ConcurrentDictionary<ulong, string> KeyHandle2KeyName = new ConcurrentDictionary<ulong, string>() { };
+        private  ConcurrentDictionary<ulong, string> KeyHandle2KeyName = new ConcurrentDictionary<ulong, string>(concurrencyLevel, intitialCapacity) { };
+        //private static ObjectCache KeyHandle2KeyNameCache = MemoryCache.Default;
+
         // user info
         private static readonly string currentUserSid = OperatingSystem.IsWindows() ? WindowsIdentity.GetCurrent().User.Value : null;
         private static readonly int pid = Process.GetCurrentProcess().Id;
+
+        private static int createCount=0;
+        private static int deleteCount=0;
+        private static int totalCount=0;
+
         //Config setting
         private static readonly double MonitorTimeInSeconds = 2;
         private static readonly int threadhold = 30;
 
         private static bool existed = false;
-        private static object lockObject = new object();
+        private readonly object lockObject = new object();
+
         //MQ socket setting
         private PublisherSocket pubSocket;
         private static readonly int port = 5556;
         private static readonly string url = $"tcp://localhost:{port}";
+
         // system process filter
         private static readonly List<string> trustedList = new List<string>() {
             "svchost",
@@ -143,7 +124,7 @@ namespace CSharpETW
         };
         private readonly List<string> _certList = new List<string>();
 
-        private readonly static string userRegPath = @"HKEY_USERS\" + currentUserSid;
+        private static readonly string userRegPath = @"HKEY_USERS\" + currentUserSid;
         // follow by MITRE: https://attack.mitre.org/techniques/T1547/001/
         // Note : need to replace HKEY_CURRENT_USER with HKEY_USERS\{user's SID}
         private readonly List<string> importantKey = new List<string>() {
@@ -210,6 +191,7 @@ namespace CSharpETW
 
             }, null, (int)(121 * 1000), (int)(121 * 1000));         
         }*/
+
         public void SocketPublisher(ETWRecords records)
         {
 
@@ -249,7 +231,7 @@ namespace CSharpETW
         //whitelist
         public bool ProcessFilter(RegistryTraceData obj, string processPath)
         {
-            return obj.ProcessID != pid;
+            
             bool flag = false;
             if (processPath != null)
             {
@@ -292,6 +274,7 @@ namespace CSharpETW
                             flag = _certList.Contains(signerCertificate.Thumbprint);
                             signerCertificate.Dispose();
                         }
+                        // Search fingerprint of issuer if in the trust certificate list
                         /*
                         else
                         {
@@ -387,7 +370,8 @@ namespace CSharpETW
                         MakeKernelParserStateless(session.Source);
                         session.Source.Kernel.RegistryKCBRundownBegin += KCBCreate;
                         session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;
-
+                        session.Source.DataLifetimeMsec = 3 * 1000;
+                        
                         if (doOnce)
                         {
                             token.Register(() =>
@@ -398,20 +382,40 @@ namespace CSharpETW
                                 stop = true;
                             });
                             doOnce = false;
+                            
+                            timer = new Timer(delegate (object? state)
+                            {
+                                //QueuedConsole.WriteLine("Timer crontab exec!!");
+                                //session.Source.StopProcessing();
+
+                                
+                                session.Stop();
+                                //session.Source.Dispose();
+                            }, null, (int)(MonitorTimeInSeconds * 1000), Timeout.Infinite);
                         }
-
-                        timer = new Timer(delegate (object? state)
+                        else
                         {
-                            QueuedConsole.WriteLine("Timer crontab exec!!");
-                            //session.Source.StopProcessing();
-                            session.Stop();
-                            //session.Source.Dispose();
-                        }, null, (int)(MonitorTimeInSeconds * 1000), Timeout.Infinite);
-
+                            
+                            timer = new Timer(delegate (object? state)
+                            {
+                                //QueuedConsole.WriteLine("Timer crontab exec!!");
+                                //session.Source.StopProcessing();
+                                session.Stop();
+                                /*
+                                QueuedConsole.WriteLine($"Increase count:{createCount}");
+                                QueuedConsole.WriteLine($"Decrease count:{deleteCount}");
+                                totalCount += (createCount - deleteCount);
+                                QueuedConsole.WriteLine($"Total count:{totalCount}");*/
+                                QueuedConsole.WriteLine($"Dict count:{KeyHandle2KeyName.Count}");
+                                //session.Source.Dispose();
+                            }, null, (int)(5 * 1000), Timeout.Infinite);
+                        }
                         
+                      
                         await Task.Run(() => session.Source.Process());
                         session.Source.Dispose();
                         session.Dispose();
+                       
                     }
 
                 }
@@ -422,33 +426,45 @@ namespace CSharpETW
             }
 
         }
-        public void RunDownSession2(String sessionName)
+        public async Task RunDownSession2(String sessionName, CancellationToken token)
         {
             try
             {
-                var stop = false;
-
+                
                 QueuedConsole.WriteLine($"Starting rundown session: {sessionName}");
-                while (!stop)
+
+                using (TraceEventSession session = new TraceEventSession(sessionName))
                 {
+                    session.EnableKernelProvider(NTKeywords.Registry, NTKeywords.None);
 
-                    using (TraceEventSession session = new TraceEventSession(sessionName))
+                    MakeKernelParserStateless(session.Source);
+                    session.Source.Kernel.RegistryKCBRundownBegin += KCBCreate;
+                    session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;
+                    
+                    token.Register(() =>
                     {
-                        session.EnableKernelProvider(NTKeywords.Registry, NTKeywords.None);
-
-                        MakeKernelParserStateless(session.Source);
-                        session.Source.Kernel.RegistryKCBRundownBegin += KCBCreate;
-                        session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;
-
-                        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.0));
-                        var _r = cts.Token.Register(() => { QueuedConsole.WriteLine("Timer crontab exec!!"); session.Stop(); });
-
-                        session.Source.Process();
-                        session.Source.Dispose();
+                        QueuedConsole.WriteLine("RunDown stop!!");
+                        session.Stop();
                         session.Dispose();
-                    }
+                        
+                    });
+                        
+                    
+                    timer = new Timer(delegate (object? state)
+                    {
+                        //QueuedConsole.WriteLine("Timer crontab exec!!");
+                        //session.Source.StopProcessing();
+                        session.Stop();
+                        //session.Source.Dispose();
+                    }, null, (int)(MonitorTimeInSeconds * 1000), (int)(MonitorTimeInSeconds * 1000));
 
+                    await Task.Run(() => session.Source.Process());
+                    
+                    session.Source.Dispose();
+                    session.Dispose();
                 }
+
+                
             }
             catch (Exception ex)
             {
@@ -475,7 +491,7 @@ namespace CSharpETW
                         session.Source.Kernel.RegistryKCBRundownEnd += KCBCreate;                       
 
                         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.0));
-                        var _r = cts.Token.Register(() => { QueuedConsole.WriteLine("Timer crontab exec!!"); session.Stop(); });
+                        var _r = cts.Token.Register(() => { session.Stop(); });
 
                         await Task.Run(() => session.Source.Process());                       
                         session.Source.Dispose();
@@ -496,7 +512,7 @@ namespace CSharpETW
         public String GetFullName(ulong keyHandle, string keyName)
         {
             var baseKeyName = KeyHandle2KeyName.ContainsKey(keyHandle) ? KeyHandle2KeyName[keyHandle] : "";
-
+            //var baseKeyName = MemoryCache.Default.Contains(keyHandle.ToString()) ? MemoryCache.Default.Get(keyHandle.ToString()).ToString() : "" ;
             var CombineName = Path.Combine(baseKeyName, keyName);
             CombineName = Regex.Replace(CombineName, @"\\REGISTRY\\MACHINE", "HKEY_LOCAL_MACHINE", RegexOptions.IgnoreCase);
             CombineName = Regex.Replace(CombineName, @"\\REGISTRY\\USER", "HKEY_USERS", RegexOptions.IgnoreCase);
@@ -521,8 +537,16 @@ namespace CSharpETW
         }
         private void GeneralValueCallBack(RegistryTraceData obj)
         {
-            var fullKeyName = GetFullName(obj.KeyHandle, obj.KeyName);
 
+            //records
+            string formattedEventTime = obj.TimeStamp.ToString("yyyy/MM/dd HH:mm:ss");
+            var eventName = obj.EventName;
+            var processID = obj.ProcessID;
+            var processName = obj.ProcessName;
+            var keyHandle = "0x" + obj.KeyHandle.ToString("X");
+            var valueName = obj.ValueName;
+            var fullKeyName = GetFullName(obj.KeyHandle, obj.KeyName);
+        
             object value = null;
             string composite_sz = null;
             RegistryKey regKey = null;
@@ -532,7 +556,7 @@ namespace CSharpETW
             // key filter
             bool key_flag = KeyFilter(fullKeyName);
             bool av_flag = false;
-
+            
             if (builtInKey.Contains(fullKeyName, StringComparer.InvariantCultureIgnoreCase))
             {
 
@@ -572,16 +596,27 @@ namespace CSharpETW
                     return;
                 }
             }
-
+            
             if (av_flag)
             {
-                string formattedEventTime = obj.TimeStamp.ToString("yyyy/MM/dd HH:mm:ss");
-                ETWRecords records = new ETWRecords { EventName = obj.EventName, EventTime = formattedEventTime, ProcessID = obj.ProcessID, ProcessName = obj.ProcessName, ImagePath = processPath, KeyHandle = "0x" + obj.KeyHandle.ToString("X"), FullKeyName = fullKeyName, ValueName = obj.ValueName, Value = "AV-Evasion detect!!" };
+                
+                ETWRecords records = new ETWRecords
+                {
+                    EventName = eventName,
+                    EventTime = formattedEventTime,
+                    ProcessID = processID,
+                    ProcessName = processName,
+                    ImagePath = processPath,
+                    KeyHandle = keyHandle,
+                    FullKeyName = fullKeyName,
+                    ValueName = valueName,
+                    Value = "AV-Evasion detect!!"
+                };
                 string jsonData = JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true });
                 QueuedConsole.WriteLine(jsonData);
                 return;
             }
-
+            
             if (fullKeyName.Contains("HKEY_LOCAL_MACHINE"))
             {
                 if (OperatingSystem.IsWindows())
@@ -704,23 +739,31 @@ namespace CSharpETW
                 }
 
             }
-
+                       
             if (existed)
             {
-                string formattedEventTime = obj.TimeStamp.ToString("yyyy/MM/dd HH:mm:ss");
-                //Console.WriteLine("EventName:{0} \t PID: {1} \t ProcessName: {2} \t KeyHandle: 0x{3:X} \t KeyName: {4}",obj.EventName, obj.ProcessID, obj.ProcessName, obj.KeyHandle, fullKeyName); 
-                ETWRecords records = new ETWRecords { EventName = obj.EventName, EventTime = formattedEventTime, ProcessID = obj.ProcessID, ProcessName = obj.ProcessName, ImagePath = processPath, KeyHandle = "0x" + obj.KeyHandle.ToString("X"), FullKeyName = fullKeyName, ValueName = obj.ValueName, Value = value.ToString() };
-                SocketPublisher(records);
+                
+                Console.WriteLine("EventName:{0} \t PID: {1} \t ProcessName: {2} \t KeyHandle: 0x{3:X} \t KeyName: {4}",obj.EventName, obj.ProcessID, obj.ProcessName, obj.KeyHandle, fullKeyName); 
+                if (value == null) { value = ""; }
+                if (processPath == null) { processPath = ""; }
+                //ETWRecords records = new ETWRecords { EventName = obj.EventName, EventTime = formattedEventTime, ProcessID = obj.ProcessID, ProcessName = obj.ProcessName, ImagePath = processPath, KeyHandle = "0x" + obj.KeyHandle.ToString("X"), FullKeyName = fullKeyName, ValueName = obj.ValueName, Value = value.ToString() };
+                ETWRecords records = new ETWRecords
+                {
+                    EventName = eventName,
+                    EventTime = formattedEventTime,
+                    ProcessID = processID,
+                    ProcessName = processName,
+                    ImagePath = processPath,
+                    KeyHandle = keyHandle,
+                    FullKeyName = fullKeyName,
+                    ValueName = valueName,
+                    Value = value.ToString()
+                };
+                //SocketPublisher(records);
 
                 existed = false;
             }
-
-            /*
-            Console.WriteLine(
-            "EventName:{0} \t PID: {1} \t ProcessName: {2} \t KeyHandle: 0x{3:X} \t KeyName: {4}",
-            obj.EventName, obj.ProcessID, obj.ProcessName, obj.KeyHandle, fullKeyName
-            );*/
-
+                      
         }
 
         private void KCBCreate(RegistryTraceData obj)
@@ -731,28 +774,82 @@ namespace CSharpETW
               obj.EventName, obj.KeyHandle, obj.KeyName, obj.ProcessName
               );
             */
-            //Console.WriteLine("Trigger");
-            /* 
+            var keyName = new string(obj.KeyName);
+            /*
             if (KeyHandle2KeyName.ContainsKey(obj.KeyHandle))
             {
+                if (KeyHandle2KeyName[obj.KeyHandle] == keyName)
+                {
+                    return;
+                }
+            }*/
+            
+            /*
+            KeyHandle2KeyName.AddOrUpdate(obj.KeyHandle, (_) => { Interlocked.Increment(ref createCount); return keyName; }, (key, oldValue) =>
+            {
+                if (keyName != oldValue)
+                {
+                    return keyName;
+                }
+                else
+                {
+                    return oldValue;
+                }
+            });
+            */
+            
+            KeyHandle2KeyName.AddOrUpdate(obj.KeyHandle, keyName, (key, oldValue) =>
+            {
+                if (keyName!=oldValue)
+                {
+                    return keyName;
+                }
+                else
+                {
+                    return oldValue;
+                }
+            });
+            
+            //KeyHandle2KeyName.TryAdd(obj.KeyHandle, keyName);
+            /*
+            //Returns null if the string does not exist, prevents a race condition where the cache invalidates between the contains check and the retreival.
+            string CacheKey = obj.KeyHandle.ToString();
+            var cachedString = MemoryCache.Default.Get(CacheKey) as string;
+            var keyName = obj.KeyName;
+            if (cachedString == keyName)
+            {
+                //Console.WriteLine("same");
                 return;
             }
-            KeyHandle2KeyName.TryAdd(obj.KeyHandle, new KeyInfo(obj.KeyName,DateTime.Now));
-            */
 
+            lock (lockObject) 
+            {
+                //Check to see if anyone wrote to the cache while we where waiting our turn to write the new value.
+                cachedString = MemoryCache.Default.Get(CacheKey) as string;
+
+                if (cachedString == keyName)
+                {
+                    return;
+                }
+
+                //The value still did not exist so we now write it in to the cache.
+                CacheItemPolicy cip = new CacheItemPolicy();
+                cip.SlidingExpiration = TimeSpan.FromSeconds(30);
+                //cip.AbsoluteExpiration = DateTimeOffset.Now.AddSeconds(60);             
+                MemoryCache.Default.Set(CacheKey, keyName, cip);
+                //Console.WriteLine(KeyHandle2KeyNameCache.GetCount());
+                return;
+            }
+            */
         }
         private void KCBDelete(RegistryTraceData obj)
-        {
-            /*
-            Console.WriteLine(
-                "EventName:{0} \t KeyHandle: 0x{1:X} \t KeyName: {2}",
-                obj.EventName, obj.KeyHandle, obj.KeyName
-                );
-            */
-            //KeyInfo? keyinfo;
-            //_ = KeyHandle2KeyName.TryRemove(obj.KeyHandle, out keyinfo);
-            string keyname;
-            KeyHandle2KeyName.TryRemove(obj.KeyHandle, out keyname);
+        {       
+            string? keyname;
+            //KeyHandle2KeyName[obj.KeyHandle].
+            KeyHandle2KeyName.TryRemove(obj.KeyHandle, out keyname);         
+            keyname = null;
+            //Uncomment to fix increasing usage of memory
+            //GC.Collect();
         }
 
 
@@ -778,25 +875,14 @@ namespace CSharpETW
                 session.Source.Kernel.RegistryKCBDelete += KCBDelete;
                 //session.Source.Kernel.RegistryOpen += GeneralKeyCallBack;
                 session.Source.Kernel.RegistrySetValue += GeneralValueCallBack;
-
+                session.Source.DataLifetimeMsec = 5 * 1000;
                 token.Register(() => {
                     session.Stop();
                     Console.WriteLine("Publisher socket Disconnecting...");
                     pubSocket.Dispose();
                 });
 
-
-                //Console.WriteLine(now.ToString("yyyy/MM/dd HH:mm:ss"));
-                /*
-                try
-                {
-                    await Task.Run(() => session.Source.Process());
-                }
-                catch (TaskCanceledException)
-                {
-                    Console.WriteLine("Session Cancelled!!");
-                }
-                */
+                
                 await Task.Run(() => session.Source.Process());
 
                 QueuedConsole.WriteLine("Session Stop!!");
@@ -968,33 +1054,16 @@ namespace CSharpETW
                 Console.WriteLine("DO OTHER THING");
 
 
-                //Stopwatch stopwatch = new Stopwatch();
-                //stopwatch.Start();
-                //Analysis As = new Analysis();
-                //Task as_task = Task.Run(() => As.StartAnalysis(cts.Token), cts.Token);
-
                 /*do Testing here*/
                 //Test test = new Test();
                 //Task test_task = Task.Run(() => test.DoTesting(), cts.Token);
                 //Test test = new Test();
                 //test.DoTesting2();
 
-
-
                 task.Wait();
-                //rundown_task.Wait();
-                
+                rundown_task.Wait();
+                 
                 /*
-                as_task.Wait();
-                stopwatch.Stop();
-                long sum = 0;
-                foreach(int i in As.memoryData)
-                {
-                    sum += i;
-                }
-                Console.WriteLine($"{stopwatch.Elapsed.TotalSeconds}");
-                Console.WriteLine($"average mem : {(double)(sum / stopwatch.Elapsed.TotalSeconds)}");
-                
                 if (OperatingSystem.IsWindows())
                 {
                     var registryKey = Registry.LocalMachine.OpenSubKey(@"Software\RegistryKeyTest");
